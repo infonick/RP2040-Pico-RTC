@@ -12,7 +12,7 @@ This library has only been lightly tested with a Raspberry Pi Pico.
         Sets the RP2040 internal RTC to a spectific date and time.
     
     localtime():
-        Returns the time stored in the RP2040 internal RTC.
+        Returns the date and time stored in the RP2040 internal RTC.
         
      __weekDay(year, month, day):
         Calculates the weekday. 0 = Sunday, 6 = Saturday.

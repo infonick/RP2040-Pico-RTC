@@ -32,7 +32,6 @@
 #   - This library will not set bit #8 of CTRL Register 0x4005e00c to force 'no
 #     leap year' for years divisible by 100. See RP2040 Datasheet section 4.8.6
 #     for info on this CTRL bit.
-#   - There are no provisions for concurrency / multiprocessing
 #   - The Day Of The Week (DOTW) stored in the RP2040 register follows a format
 #     of '1-Monday…0-Sunday ISO 8601 mod 7', while Micropython's utime library
 #     follows a format of '0-6 for Mon-Sun'.
@@ -47,6 +46,8 @@ from machine import mem32
 from machine import disable_irq
 from machine import enable_irq
 
+from _thread import allocate_lock
+
 from utime import sleep_us
 
 from math import floor
@@ -54,7 +55,8 @@ from math import floor
 
 class rp2RTC:
     """
-    Raspberry Pi Pico RTC class - manages the internal RP2040 Real Time Clock
+    Raspberry Pi Pico RTC class - functions that manage the internal RP2040
+    Real Time Clock
     
     ≡≡≡ Methods ≡≡≡
     setRTC(year, month, day, hour, minute, second):
@@ -63,16 +65,16 @@ class rp2RTC:
     localtime():
         Returns the date and time stored in the RP2040 internal RTC.
         
-     __weekDay(year, month, day):
+    weekDay(year, month, day):
         Calculates the weekday. 0 = Sunday, 6 = Saturday.
         
-    __isLeapYear(year):
+    isLeapYear(year):
         Calculates whether a given year is a leap year.
     
     __validDateTime(year, month, day, hour, minute, second):
         This method validates a set of date/time information.
     
-    __rtc_running():
+    rtc_running():
         Returns True if the RP2040 RTC is running
     """
     
@@ -100,15 +102,12 @@ class rp2RTC:
     __RTC_RTC_1_MONTH_BITS = 0x00000f00
     __RTC_RTC_1_DAY_BITS = 0x0000001f
     
-
-
-    #def __new__(cls, *args, **kwargs):
-
-    #def __init__(self):
+    __RTCAccessLock = allocate_lock()
     
-    def setRTC(self, year, month, day, hour, minute, second):        
+    @staticmethod
+    def setRTC(year, month, day, hour, minute, second):        
         """
-        Sets the RP2040 internal RTC to a spectific date and time.
+        Sets the RP2040 internal RTC to a specific date and time.
         
         ≡≡≡ Required Parameters ≡≡≡
         year:   int, representing a valid year in the range of 0 - 4095
@@ -127,38 +126,42 @@ class rp2RTC:
         """
         
         # Make sure RTC is running
-        if not self.__rtc_running():
+        if not rp2RTC.rtc_running():
             return False
         
         # Error Checking. Raises TypeError or ValueError
-        self.__validDateTime(self, year, month, day, hour, minute, second)
+        rp2RTC.__validDateTime(year, month, day, hour, minute, second)
 
         # Get weekday
-        wday = self.__weekDay(year, month, day)
+        wday = rp2RTC.weekDay(year, month, day)
         
         clkPeriod_us = 0
         
         try:
             # Find the period of one RTC clock cycle in microseconds
-            clk_rtcDivider = (mem32[self.__RTC_BASE_MEM] & 0xffff) + 1 
+            clk_rtcDivider = (mem32[rp2RTC.__RTC_BASE_MEM] & 0xffff) + 1 
             clkPeriod_us = int(1000000 / clk_rtcDivider)
             
             # Enter critical section
-            irqState = disable_irq() 
+            #irqState = disable_irq()
+            
+            rp2RTC.__RTCAccessLock.acquire()
 
             # Store date information to RTC registers
-            mem32[self.__RTC_BASE_MEM + 4] = (year << 12) | (month  << 8) | day
-            mem32[self.__RTC_BASE_MEM + 8] = ((hour << 16) | (minute << 8) | second) | (wday << 24)
+            mem32[rp2RTC.__RTC_BASE_MEM + 4] = (year << 12) | (month  << 8) | day
+            mem32[rp2RTC.__RTC_BASE_MEM + 8] = ((hour << 16) | (minute << 8) | second) | (wday << 24)
 
             # Set the LOAD bit in the CTRL register
-            mem32[self.__RTC_BASE_MEM + self.__ATOMIC_BITMASK_SET + 0xc] = 0x10
+            mem32[rp2RTC.__RTC_BASE_MEM + rp2RTC.__ATOMIC_BITMASK_SET + 0xc] = 0x10
 
         except:
             raise
 
         finally:
             # End critical section
-            enable_irq(irqState)
+            #enable_irq(irqState)
+            
+            rp2RTC.__RTCAccessLock.release()
             
             # Writing to the RTC registers will take 2 clk_rtc clock periods to
             # arrive, additional to the clk_sys (system clock) domain, as per
@@ -171,6 +174,7 @@ class rp2RTC:
         return True
 
 
+    @staticmethod
     def localtime():
         """
         Returns the time stored in the RP2040 internal RTC.
@@ -189,26 +193,26 @@ class rp2RTC:
         """
         
         # Make sure RTC is running
-        if not self.__rtc_running():
+        if not rp2RTC.rtc_running():
             return False
  
         # Note: RTC_0 should be read before RTC_1
-        rtc_0 = mem32[self.__RTC_BASE_MEM + 0x1c]
-        rtc_1 = mem32[self.__RTC_BASE_MEM + 0x18]         
+        rtc_0 = mem32[rp2RTC.__RTC_BASE_MEM + 0x1c]
+        rtc_1 = mem32[rp2RTC.__RTC_BASE_MEM + 0x18]         
  
-        dotw = (rtc_0 & self.__RTC_RTC_0_DOTW_BITS ) >> 24
-        hour = (rtc_0 & self.__RTC_RTC_0_HOUR_BITS ) >> 16
-        minute = (rtc_0 & self.__RTC_RTC_0_MIN_BITS ) >> 8
-        second = (rtc_0 & self.__RTC_RTC_0_SEC_BITS ) >> 0
-        year = (rtc_1 & self.__RTC_RTC_1_YEAR_BITS ) >> 12
-        month = (rtc_1 & self.__RTC_RTC_1_MONTH_BITS) >> 8
-        day = (rtc_1 & self.__RTC_RTC_1_DAY_BITS ) >> 0
+        dotw = (rtc_0 & rp2RTC.__RTC_RTC_0_DOTW_BITS ) >> 24
+        hour = (rtc_0 & rp2RTC.__RTC_RTC_0_HOUR_BITS ) >> 16
+        minute = (rtc_0 & rp2RTC.__RTC_RTC_0_MIN_BITS ) >> 8
+        second = (rtc_0 & rp2RTC.__RTC_RTC_0_SEC_BITS ) >> 0
+        year = (rtc_1 & rp2RTC.__RTC_RTC_1_YEAR_BITS ) >> 12
+        month = (rtc_1 & rp2RTC.__RTC_RTC_1_MONTH_BITS) >> 8
+        day = (rtc_1 & rp2RTC.__RTC_RTC_1_DAY_BITS ) >> 0
 
         return (year, month, day, hour, minute, second, dotw)
     
     
-    
-    def __weekDay(self, year, month, day):
+    @staticmethod
+    def weekDay(year, month, day, asString=False):
         """
         Calculates the weekday. 0 = Sunday, 6 = Saturday.
         
@@ -217,12 +221,18 @@ class rp2RTC:
         month:  int, representing a valid month in the range of 1 - 12
         day:    int, representing a valid date in the range of 1..[28,29,30,31]
         
+        ≡≡≡ Optional Parameters ≡≡≡
+        asString: bool, if True the weekday is returned as a string.
+        
         ≡≡≡ Returns ≡≡≡
         int: represents the weekday where 0 = Sunday, 6 = Saturday.
+        str: weekday is returned as a string if 'asString' parameter = True
         """
+        weekdayString=['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday',
+                       'Friday', 'Saturday']
         # Doomsday dates by month
         doomsdays = [3, 28, 14, 4, 9, 6, 11, 8, 5, 10, 7, 12] 
-        if self.__isLeapYear(year):
+        if rp2RTC.isLeapYear(year):
             doomsdays[0] = 4
             doomsdays[1] = 29
         
@@ -231,10 +241,14 @@ class rp2RTC:
 
         dayOfWeek = (day - doomsdays[month-1] + anchorDay) % 7
         
-        return dayOfWeek
+        if asString:
+            return weekdayString[dayOfWeek]
+        else:
+            return dayOfWeek
 
 
-    def __isLeapYear(self, year):
+    @staticmethod
+    def isLeapYear(year):
         """
         Calculates whether a given year is a leap year.
         
@@ -252,7 +266,8 @@ class rp2RTC:
             return False
 
 
-    def __validDateTime(self, year, month, day, hour, minute, second):
+    @staticmethod
+    def __validDateTime(year, month, day, hour, minute, second):
         """
         This method validates a set of date/time information.
         
@@ -271,12 +286,12 @@ class rp2RTC:
         ≡≡≡ Returns ≡≡≡
         bool: True if the data types and values are legal
         """
-        parameters = {'year'   : (year, self.__LEGAL_YEAR),
-                      'month'  : (month, self.__LEGAL_MONTH),
-                      'day'    : (day, self.__LEGAL_DAY),
-                      'hour'   : (hour, self.__LEGAL_HOUR),
-                      'minute' : (minute, self.__LEGAL_MINUTE),
-                      'second' : (second, self.__LEGAL_SECOND)
+        parameters = {'year'   : (year, rp2RTC.__LEGAL_YEAR),
+                      'month'  : (month, rp2RTC.__LEGAL_MONTH),
+                      'day'    : (day, rp2RTC.__LEGAL_DAY),
+                      'hour'   : (hour, rp2RTC.__LEGAL_HOUR),
+                      'minute' : (minute, rp2RTC.__LEGAL_MINUTE),
+                      'second' : (second, rp2RTC.__LEGAL_SECOND)
                       }
 
 
@@ -313,7 +328,7 @@ class rp2RTC:
                 # February:
                 elif parameters['month'][0] == 2 and parameters[key][0] not in range(1,29):                  
                     errMin = 1
-                    if self.__isLeapYear(parameters['year'][0]):
+                    if rp2RTC.isLeapYear(parameters['year'][0]):
                         errMax = 29
                     else:
                         errMax = 28
@@ -351,15 +366,15 @@ class rp2RTC:
                 raise ValueError(errMsg)
 
 
-    
-    def __rtc_running(self):
+    @staticmethod
+    def rtc_running():
         """Returns True if the RP2040 RTC is running
         
         ≡≡≡ Returns ≡≡≡
         bool: True if the RP2040 RTC is running, False if it is not running
         """
-        ctrlRegister = mem32[self.__RTC_BASE_MEM + 0x0c]
-        if (ctrlRegister & self.__RTC_CTRL_RTC_ACTIVE_BITS) > 0:
+        ctrlRegister = mem32[rp2RTC.__RTC_BASE_MEM + 0x0c]
+        if (ctrlRegister & rp2RTC.__RTC_CTRL_RTC_ACTIVE_BITS) > 0:
             return True
         else:
             return False

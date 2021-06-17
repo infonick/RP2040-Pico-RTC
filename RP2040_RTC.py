@@ -32,6 +32,7 @@
 #   - This library will not set bit #8 of CTRL Register 0x4005e00c to force 'no
 #     leap year' for years divisible by 100. See RP2040 Datasheet section 4.8.6
 #     for info on this CTRL bit.
+#   - There are no provisions for concurrency / multiprocessing
 #   - The Day Of The Week (DOTW) stored in the RP2040 register follows a format
 #     of '1-Monday…0-Sunday ISO 8601 mod 7', while Micropython's utime library
 #     follows a format of '0-6 for Mon-Sun'.
@@ -60,7 +61,7 @@ class rp2RTC:
         Sets the RP2040 internal RTC to a spectific date and time.
     
     localtime():
-        Returns the time stored in the RP2040 internal RTC.
+        Returns the date and time stored in the RP2040 internal RTC.
         
      __weekDay(year, month, day):
         Calculates the weekday. 0 = Sunday, 6 = Saturday.
@@ -170,7 +171,7 @@ class rp2RTC:
         return True
 
 
-    def localtime(self):
+    def localtime():
         """
         Returns the time stored in the RP2040 internal RTC.
         

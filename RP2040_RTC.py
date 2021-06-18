@@ -364,6 +364,8 @@ class rp2RTC:
                     errMsg += ' for month ' + str(parameters['month'][0])
                               
                 raise ValueError(errMsg)
+        else:
+            return True
 
 
     @staticmethod
